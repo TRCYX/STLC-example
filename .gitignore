@@ -1,0 +1,42 @@
+# Build artifacts
+dist/
+dist-newstyle/
+.stack-work/
+cabal-dev/
+
+# Compiled files
+*.o
+*.hi
+*.chi
+*.chs.h
+*.dyn_o
+*.dyn_hi
+*.hie
+
+# HPC (Haskell Program Coverage)
+.hpc/
+*.tix
+
+# Documentation
+doc/
+html/
+
+# Editor/IDE specific files
+.vscode/
+.idea/
+*.swp
+*~
+.#*
+
+# Other temporary files
+*.bak
+*.log
+*.prof
+*.dump
+
+# Stack specific
+.stack-work/
+stack.yaml.lock
+
+# Cabal specific
+cabal.project.local
