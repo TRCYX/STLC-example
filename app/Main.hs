@@ -81,37 +81,69 @@ parseLang inp =
 
 type Context = [(String, Type)]
 
-type TCMonad = Either String
+newtype TC a = TC { runTC :: Context -> Either String a }
 
-lookupVar :: String -> Context -> TCMonad Type
-lookupVar x = go
+-- The instance should be derived with monad transformers!
+-- Without them, we can give very abstract instances if we do not want to dive into the details of `(->)` and `Either`
+
+instance Functor TC where
+  -- fmap :: (a -> b) -> (TC a -> TC b)
+  fmap f = TC . fmap (fmap f) . runTC
+             -- ^ for `(->) Context`
+                   -- ^ for `Either String`
+
+instance Applicative TC where
+  -- pure :: a -> TC a
+  pure = TC . pure . pure
+           -- ^ for `(->) Context`
+                  -- ^ for `Either String`
+
+  -- liftA2 :: (a -> b -> c) -> (TC a -> TC b -> TC c)
+  liftA2 f (TC ma) (TC mb) = TC $ liftA2 (liftA2 f) ma mb
+                               -- ^ for `(->) Context`
+                                       -- ^ for `Either String`
+
+instance Monad TC where
+  -- (>>=) :: TC a -> (a -> TC b) -> TC b
+  (TC ma) >>= f = TC $ liftA2 (>>=) ma (flip (runTC . f))
+                    -- ^ for `(->) Context`
+                            -- ^ for `Either String
+
+with :: String -> Type -> TC a -> TC a
+with x ty ma = TC $ \ctx -> runTC ma ((x, ty):ctx)
+
+reportError :: String -> TC a
+reportError msg = TC $ \_ -> Left msg
+
+lookupVar :: String -> TC Type
+lookupVar x = TC go
   where
-    go :: Context -> TCMonad Type
-    go []                         = Left $ "Unbound variable: " ++ x
-    go ((y, ty):ctx) | x == y    = pure ty
+    go :: Context -> Either String Type
+    go []                        = Left $ "Unbound variable: " ++ x
+    go ((y, ty):ctx) | x == y    = Right ty
                      | otherwise = go ctx
 
-typeCheck :: Context -> Term -> TCMonad Type
-typeCheck  ctx (TmVar x)        = lookupVar x ctx
-typeCheck  ctx (TmAbs x ty tm)  = TyArr ty <$> typeCheck ((x, ty) : ctx) tm
-typeCheck  ctx (TmApp fun arg)  = do
-  tyfun <- typeCheck ctx fun
-  tyarg <- typeCheck ctx arg
+typeCheck :: Term -> TC Type
+typeCheck (TmVar x)        = lookupVar x
+typeCheck (TmAbs x ty tm)  = TyArr ty <$> with x ty (typeCheck tm)
+typeCheck (TmApp fun arg)  = do
+  tyfun <- typeCheck fun
+  tyarg <- typeCheck arg
   case tyfun of
     TyArr typar tyret
       | typar == tyarg -> pure tyret
-      | otherwise      -> Left $ "Expected term of type " ++ show typar ++ ", found " ++ show arg ++ " of type " ++ show tyarg
-    _ -> Left $ "Applying non-function " ++ show fun ++ " of type " ++ show tyfun
-typeCheck _ctx (TmInt _)        = pure TyInt
-typeCheck  ctx (TmPlus tm1 tm2) = do
-  ty1 <- typeCheck ctx tm1
-  ty2 <- typeCheck ctx tm2
+      | otherwise      -> reportError $ "Expected term of type " ++ show typar ++ ", found " ++ show arg ++ " of type " ++ show tyarg
+    _ -> reportError $ "Applying non-function " ++ show fun ++ " of type " ++ show tyfun
+typeCheck (TmInt _)        = pure TyInt
+typeCheck (TmPlus tm1 tm2) = do
+  ty1 <- typeCheck tm1
+  ty2 <- typeCheck tm2
   case (ty1, ty2) of
     (TyInt, TyInt) -> pure TyInt
-    (TyInt, _)     -> Left $ "Expected operand of type Int, found " ++ show tm2 ++ " of type " ++ show ty2
-    (_    , _)     -> Left $ "Expected operand of type Int, found " ++ show tm1 ++ " of type " ++ show ty1
+    (TyInt, _)     -> reportError $ "Expected operand of type Int, found " ++ show tm2 ++ " of type " ++ show ty2
+    (_    , _)     -> reportError $ "Expected operand of type Int, found " ++ show tm1 ++ " of type " ++ show ty1
 
-type EvalSubstMonad = Either String
+type ES = Either String
 
 subst :: String -> Term -> Term -> Term
 subst x val = go
@@ -125,7 +157,7 @@ subst x val = go
     go (TmInt i)                   = TmInt i
     go (TmPlus tm1 tm2)            = TmPlus (go tm1) (go tm2)
 
-evalSubst :: Term -> EvalSubstMonad Term
+evalSubst :: Term -> ES Term
 evalSubst (TmVar x)        = pure $ TmVar x
 evalSubst (TmAbs x ty tm)  = pure $ TmAbs x ty tm
 evalSubst (TmApp fun arg)  = do
@@ -151,7 +183,7 @@ main = do
       contents <- readFile filename
       case parseLang contents of
         Nothing -> error "No parse!"
-        Just tm -> case typeCheck [] tm of
+        Just tm -> case runTC (typeCheck tm) [] of
           Left msg -> error msg
           Right ty -> print ty
     ["eval", filename] -> do
